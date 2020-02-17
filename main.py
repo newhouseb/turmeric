@@ -1,7 +1,12 @@
 from subprocess import Popen, PIPE
+from ngspice_read import ngspice_read
+import tempfile
+import os
 
 def run_spice(spice):
-    return Popen(['ngspice', '-a', '-b'], stdin=PIPE, stdout=PIPE).communicate(input=spice.encode())[0]
+    raw_file = os.path.join(tempfile.mkdtemp(), "spice.raw")
+    Popen(['ngspice', '-a', '-b', '-r' + raw_file], stdin=PIPE, stdout=PIPE).communicate(input=spice.encode())
+    return ngspice_read(raw_file)
 
 class Circuit(object):
     def __init__(self):
@@ -10,7 +15,6 @@ class Circuit(object):
 
     def add(self, component):
         self.components.append(component)
-        return component
 
     def connect(self, *args):
         node = self.node_count
@@ -34,7 +38,11 @@ class Circuit(object):
         spice += ".op\n"
         spice += ".end\n"
         result = run_spice(spice)
-        print(result)
+
+        vec = result.get_plots()[0].get_scalevector()
+        print(vec.name, vec.get_data())
+        for vec in result.get_plots()[0].get_datavectors():
+            print(vec.name, vec.get_data())
 
     def transient_analysis(self):
         pass
@@ -50,7 +58,10 @@ class Port(object):
 class Resistor(object):
     IDX = 0
 
-    def __init__(self, name=None, resistance=100):
+    def __init__(self, circuit, name=None, resistance=100):
+        self.circuit = circuit
+        self.circuit.add(self)
+
         self.resistance = resistance
         self.ports = [Port(), Port()]
         self.top = self.neg = self.ports[0]
@@ -64,7 +75,10 @@ class Resistor(object):
 class DCVoltage(object):
     IDX = 0
 
-    def __init__(self, name=None, voltage=1):
+    def __init__(self, circuit, name=None, voltage=1):
+        self.circuit = circuit
+        self.circuit.add(self)
+
         self.voltage = voltage
         self.pos = Port()
         self.neg = Port()
@@ -88,9 +102,9 @@ class DCVoltage(object):
 # r2.bottom = c.ground
 
 c = Circuit()
-dc = c.add(DCVoltage(voltage=2))
-r1 = c.add(Resistor(resistance=100))
-r2 = c.add(Resistor(resistance=100))
+dc = DCVoltage(c, voltage=2)
+r1 = Resistor(c, resistance=100)
+r2 = Resistor(c, resistance=50)
 c.ground(dc.neg, r2.bottom)
 c.connect(dc.pos, r1.top)
 c.connect(r1.bottom, r2.top)
