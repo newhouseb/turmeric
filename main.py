@@ -4,9 +4,48 @@ import tempfile
 import os
 
 def run_spice(spice):
+    print(spice)
     raw_file = os.path.join(tempfile.mkdtemp(), "spice.raw")
     Popen(['ngspice', '-a', '-b', '-r' + raw_file], stdin=PIPE, stdout=PIPE).communicate(input=spice.encode())
     return ngspice_read(raw_file)
+
+def connect(*args):
+    node = None 
+    circuit = None
+    for arg in args:
+        if isinstance(arg, Port):
+            if node is None:
+                circuit = arg.circuit
+                node = arg.circuit.node_count
+            arg.node = node
+        else:
+            for port in arg.ports:
+                if node is None:
+                    circuit = port.circuit
+                    node = port.circuit.node_count
+                if port.node is None:
+                    port.node = node
+                    break
+    circuit.node_count += 1
+
+def ground(*args):
+    for arg in args:
+        if isinstance(arg, Port):
+            arg.node = 0
+        else:
+            for port in arg.ports:
+                if port.node is None:
+                    port.node = 0
+                    break
+
+class Port(object):
+    def __init__(self, circuit):
+        self.circuit = circuit
+        self.node = None
+
+class Component(object):
+    def __init__(self, prefix=None, name=None):
+        pass
 
 class Circuit(object):
     def __init__(self):
@@ -15,16 +54,6 @@ class Circuit(object):
 
     def add(self, component):
         self.components.append(component)
-
-    def connect(self, *args):
-        node = self.node_count
-        for arg in args:
-            arg.node = node
-        self.node_count += 1
-
-    def ground(self, *args):
-        for arg in args:
-            arg.node = 0
 
     def generate_spice(self):
         spice = ""
@@ -47,15 +76,8 @@ class Circuit(object):
     def transient_analysis(self):
         pass
 
-class Component(object):
-    def __init__(self, prefix=None, name=None):
-        pass
 
-class Port(object):
-    def __init__(self):
-        self.node = None
-
-class Resistor(object):
+class Resistor(Component):
     IDX = 0
 
     def __init__(self, circuit, name=None, resistance=100):
@@ -63,7 +85,7 @@ class Resistor(object):
         self.circuit.add(self)
 
         self.resistance = resistance
-        self.ports = [Port(), Port()]
+        self.ports = [Port(circuit), Port(circuit)]
         self.top = self.neg = self.ports[0]
         self.bottom = self.pos = self.ports[1]
         self.name = "R" + str(Resistor.IDX)
@@ -72,7 +94,7 @@ class Resistor(object):
     def generate_spice(self):
         return F"{self.name} {self.pos.node} {self.neg.node} {self.resistance}"
 
-class DCVoltage(object):
+class DCVoltage(Component):
     IDX = 0
 
     def __init__(self, circuit, name=None, voltage=1):
@@ -80,8 +102,8 @@ class DCVoltage(object):
         self.circuit.add(self)
 
         self.voltage = voltage
-        self.pos = Port()
-        self.neg = Port()
+        self.pos = Port(circuit)
+        self.neg = Port(circuit)
         self.name = "V" + str(DCVoltage.IDX)
         DCVoltage.IDX += 1
 
@@ -95,18 +117,14 @@ class DCVoltage(object):
 # connect(r1, r2)
 # ground(r2)
 # ground(dc.neg)
-#
-# dc.neg = c.ground
-# dc.pos = r1.top
-# r1.bottom = r2.top
-# r2.bottom = c.ground
 
 c = Circuit()
 dc = DCVoltage(c, voltage=2)
 r1 = Resistor(c, resistance=100)
 r2 = Resistor(c, resistance=50)
-c.ground(dc.neg, r2.bottom)
-c.connect(dc.pos, r1.top)
-c.connect(r1.bottom, r2.top)
+r3 = Resistor(c, resistance=50)
+ground(dc.neg, r2, r3)
+connect(dc.pos, r1)
+connect(r1, r2, r3)
 print(c.operating_point())
 
