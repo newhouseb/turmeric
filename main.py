@@ -2,6 +2,7 @@ from subprocess import Popen, PIPE
 from ngspice_read import ngspice_read
 import tempfile
 import os
+import re
 
 def run_spice(spice):
     print(spice)
@@ -27,6 +28,7 @@ def connect(*args):
                     port.node = node
                     break
     circuit.node_count += 1
+    return Port(circuit, node=node)
 
 def ground(*args):
     for arg in args:
@@ -39,9 +41,13 @@ def ground(*args):
                     break
 
 class Port(object):
-    def __init__(self, circuit):
+    def __init__(self, circuit, node=None):
         self.circuit = circuit
-        self.node = None
+        self.node = node
+
+    @property
+    def voltage(self):
+        return self.circuit.operating_points[self.node]
 
 class Component(object):
     def __init__(self, prefix=None, name=None):
@@ -51,6 +57,7 @@ class Circuit(object):
     def __init__(self):
         self.node_count = 1 # 0 is allocated to GND
         self.components = []
+        self.operating_points = {}
 
     def add(self, component):
         self.components.append(component)
@@ -61,21 +68,53 @@ class Circuit(object):
             spice += component.generate_spice() + "\n"
         return spice
 
-    def operating_point(self):
+    def compute_operating_point(self):
         spice = "Operating point simulation\n"
         spice += self.generate_spice()
         spice += ".op\n"
         spice += ".end\n"
         result = run_spice(spice)
 
-        vec = result.get_plots()[0].get_scalevector()
-        print(vec.name, vec.get_data())
-        for vec in result.get_plots()[0].get_datavectors():
-            print(vec.name, vec.get_data())
+        self._load_result(result, unary=True)
+
+    def compute_dc_sweep(self, *sweeps):
+        """ Syntax is compute_dc_sweep((Component, start, stop, step),...) """
+
+        formatted = ' '.join(F"{component.name} {start} {stop} {step}" for component, start, stop, step in sweeps)
+        spice = "Operating point simulation\n"
+        spice += self.generate_spice()
+        spice += F".dc {formatted}\n"
+        spice += ".end\n"
+        result = run_spice(spice)
+
+        self._load_result(result)
 
     def transient_analysis(self):
         pass
 
+    def _load_result(self, result, unary=False):
+        vec = result.get_plots()[0].get_scalevector()
+        print(vec.name)
+        kind, node = re.search("([a-zA-Z]+)\(([-a-zA-Z0-9]+)\)", vec.name).group(1, 2)
+        if kind == 'v':
+            if node.isdigit():
+                print(node, vec.get_data())
+                self.operating_points[int(node)] = vec.get_data()[0] if unary else vec.get_data()
+            else:
+                print("Ignoring node", node, vec.get_data())
+        else:
+            print("Ignoring type", kind)
+
+        for vec in result.get_plots()[0].get_datavectors():
+            kind, node = re.search("([a-zA-Z]+)\(([-a-zA-Z0-9]+)\)", vec.name).group(1, 2)
+            if kind == 'v':
+                if node.isdigit():
+                    print(node, vec.get_data())
+                    self.operating_points[int(node)] = vec.get_data()[0] if unary else vec.get_data()
+                else:
+                    print("Ignoring node", node)
+            else:
+                print("Ignoring type", kind)
 
 class Resistor(Component):
     IDX = 0
@@ -110,14 +149,6 @@ class DCVoltage(Component):
     def generate_spice(self):
         return F"{self.name} {self.pos.node} {self.neg.node} {self.voltage}"
 
-# dc = DCVoltage(1)
-# r1 = Resistor(100)
-# r2 = Resistor(100)
-# connect(dc.pos, r1)
-# connect(r1, r2)
-# ground(r2)
-# ground(dc.neg)
-
 c = Circuit()
 dc = DCVoltage(c, voltage=2)
 r1 = Resistor(c, resistance=100)
@@ -125,6 +156,10 @@ r2 = Resistor(c, resistance=50)
 r3 = Resistor(c, resistance=50)
 ground(dc.neg, r2, r3)
 connect(dc.pos, r1)
-connect(r1, r2, r3)
-print(c.operating_point())
+div = connect(r1, r2, r3)
 
+c.compute_operating_point()
+print(div.voltage)
+
+c.compute_dc_sweep((dc, 0, 1, 0.5))
+print(div.voltage)
