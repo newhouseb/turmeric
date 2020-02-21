@@ -1,13 +1,12 @@
-from subprocess import Popen, PIPE
+from subprocess import Popen, PIPE, call
 from ngspice_read import ngspice_read
 import tempfile
 import os
 import re
-
-from pygraphviz import *
+import json
 
 def run_spice(spice):
-    print(spice)
+    #print(spice)
     raw_file = os.path.join(tempfile.mkdtemp(), "spice.raw")
     Popen(['ngspice', '-a', '-b', '-r' + raw_file], stdin=PIPE, stdout=PIPE).communicate(input=spice.encode())
     return ngspice_read(raw_file)
@@ -36,7 +35,6 @@ def connect(*args):
         second = args[1]
         if isinstance(second, Port):
             second = second.component
-        circuit.edges.append((first, second))
     else:
         pass
     circuit.node_count += 1
@@ -45,26 +43,13 @@ def connect(*args):
 GROUND = 'gnd'
 
 def ground(*args):
-    # Deduce the circuit
-    circuit = None
-    for arg in args:
-        if isinstance(arg, Port):
-            if circuit is None:
-                circuit = arg.circuit
-        else:
-            for port in arg.ports:
-                if circuit is None:
-                    circuit = port.circuit
-
     for arg in args:
         if isinstance(arg, Port):
             arg.node = 0
-            circuit.edges.append((arg.component, GROUND))
         else:
             for port in arg.ports:
                 if port.node is None:
                     port.node = 0
-                    circuit.edges.append((arg, GROUND))
                     break
 
 class Port(object):
@@ -88,9 +73,6 @@ class Circuit(object):
         self.components = []
         self.operating_points = {}
 
-        self.dummy_nodes = []
-        self.edges = []
-
     def add(self, component):
         self.components.append(component)
 
@@ -100,16 +82,19 @@ class Circuit(object):
             spice += component.generate_spice() + "\n"
         return spice
 
-    def render(self):
-        g = AGraph()
-        g.graph_attr['splines'] = 'ortho'
-        g.graph_attr['nodesep'] = '1'
-        for component in self.components:
-            g.add_node(component.name)
-        for edge in self.edges:
-            g.add_edge(edge[0].name, edge[1].name if hasattr(edge[1], 'name') else edge[1])
-        g.layout(prog='dot')
-        g.draw('circuit.png')
+    def render_svg(self):
+        netlist = {'modules': {
+            'circuit': {
+                'cells': { component.name: component.json() for component in self.components }}}}
+
+        scratch_dir = tempfile.mkdtemp()
+        netlist_path = os.path.join(scratch_dir, "netlist.json")
+        circuit = os.path.join(scratch_dir, "circuit.svg")
+        with open(netlist_path,'w') as f:
+            f.write(json.dumps(netlist))
+        call(['netlistsvg', netlist_path, '--skin', 'analog.svg', '-o', circuit])
+        with open(circuit,'r') as f:
+            return f.read()
 
     def compute_operating_point(self):
         spice = "Operating point simulation\n"
@@ -137,11 +122,10 @@ class Circuit(object):
 
     def _load_result(self, result, unary=False):
         vec = result.get_plots()[0].get_scalevector()
-        print(vec.name)
         kind, node = re.search("([a-zA-Z]+)\(([-a-zA-Z0-9]+)\)", vec.name).group(1, 2)
         if kind == 'v':
             if node.isdigit():
-                print(node, vec.get_data())
+                #print(node, vec.get_data())
                 self.operating_points[int(node)] = vec.get_data()[0] if unary else vec.get_data()
             else:
                 print("Ignoring node", node, vec.get_data())
@@ -152,7 +136,7 @@ class Circuit(object):
             kind, node = re.search("([a-zA-Z]+)\(([-a-zA-Z0-9]+)\)", vec.name).group(1, 2)
             if kind == 'v':
                 if node.isdigit():
-                    print(node, vec.get_data())
+                    #print(node, vec.get_data())
                     self.operating_points[int(node)] = vec.get_data()[0] if unary else vec.get_data()
                 else:
                     print("Ignoring node", node)
@@ -176,6 +160,17 @@ class Resistor(Component):
     def generate_spice(self):
         return F"{self.name} {self.pos.node} {self.neg.node} {self.resistance}"
 
+    def json(self):
+        return {
+                'type': 'r_v',
+                'connections': {
+                    'A': [self.top.node],
+                    'B': [self.bottom.node]
+                },
+                'attributes': {
+                    'value': str(self.resistance)
+                }}
+
 class DCVoltage(Component):
     IDX = 0
 
@@ -192,22 +187,14 @@ class DCVoltage(Component):
     def generate_spice(self):
         return F"{self.name} {self.pos.node} {self.neg.node} {self.voltage}"
 
-c = Circuit()
-dc = DCVoltage(c, voltage=2)
-#dc2 = DCVoltage(c, voltage=1)
+    def json(self):
+        return {
+                'type': 'v',
+                'connections': {
+                    '+': [self.pos.node],
+                    '-': [self.neg.node]
+                },
+                'attributes': {
+                    'value': str(self.voltage)
+                }}
 
-r1 = Resistor(c, resistance=100)
-r2 = Resistor(c, resistance=50)
-#r3 = Resistor(c, resistance=50)
-ground(dc.neg, r2) #, r3, dc2.neg)
-connect(dc.pos, r1)
-div = connect(r1, r2) #, r3, dc2.pos)
-
-
-c.compute_operating_point()
-print(div.voltage)
-
-c.compute_dc_sweep((dc, 0, 1, 0.5)) #, (dc2, 0, 1, 0.5))
-print(div.voltage)
-
-c.render()
