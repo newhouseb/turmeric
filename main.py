@@ -83,9 +83,19 @@ class Circuit(object):
         return spice
 
     def render_svg(self):
+        cells = { component.name: component.json() for component in self.components }
+        cells['gnd'] = {
+            'type': 'gnd',
+            'port_directions': {
+                'A': 'input'
+            },
+            'connections': {
+                'A': [0]
+            }
+        }
         netlist = {'modules': {
             'circuit': {
-                'cells': { component.name: component.json() for component in self.components }}}}
+                'cells': cells }}}
 
         scratch_dir = tempfile.mkdtemp()
         netlist_path = os.path.join(scratch_dir, "netlist.json")
