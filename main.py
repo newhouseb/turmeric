@@ -159,6 +159,8 @@ class Circuit(object):
             if kind == 'v':
                 if node.isdigit():
                     self.operating_points[int(node)] = vec.get_data()[0] if unary else vec.get_data()
+                elif node == 'v-sweep':
+                    self.sweep = vec.get_data()
                 else:
                     print("Ignoring node", node, vec.get_data())
             elif kind == 'i':
