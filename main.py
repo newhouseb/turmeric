@@ -6,6 +6,7 @@ import re
 import json
 
 def run_spice(spice):
+    #print(spice)
     raw_file = os.path.join(tempfile.mkdtemp(), "spice.raw")
     Popen(['ngspice', '-a', '-b', '-r' + raw_file], stdin=PIPE, stdout=PIPE).communicate(input=spice.encode())
     return ngspice_read(raw_file)
@@ -71,12 +72,14 @@ class Circuit(object):
         self.node_count = 1 # 0 is allocated to GND
         self.components = []
         self.operating_points = {}
+        self.current = {}
+        self.imports = []
 
     def add(self, component):
         self.components.append(component)
 
     def generate_spice(self):
-        spice = ""
+        spice = self.load_imports()
         for component in self.components:
             spice += component.generate_spice() + "\n"
         return spice
@@ -104,6 +107,14 @@ class Circuit(object):
         call(['netlistsvg', netlist_path, '--skin', 'analog.svg', '-o', circuit])
         with open(circuit,'r') as f:
             return f.read()
+        
+    def load_imports(self):
+        # TODO: unique this
+        source = ""
+        for imp in self.imports:
+            with open(imp, 'r') as f:
+                source += f.read() + "\n"
+        return source
 
     def compute_operating_point(self):
         spice = "Operating point simulation\n"
@@ -140,27 +151,32 @@ class Circuit(object):
 
     def _load_result(self, result, unary=False):
         vec = result.get_plots()[0].get_scalevector()
+        #print(vec.name)
         if vec.name == 'time':
             self.time = vec.get_data()
         else:
-            kind, node = re.search("([a-zA-Z]+)\(([-a-zA-Z0-9]+)\)", vec.name).group(1, 2)
+            kind, node = re.search("([a-zA-Z]+)\(([-.a-zA-Z0-9]+)\)", vec.name).group(1, 2)
             if kind == 'v':
                 if node.isdigit():
-                    #print(node, vec.get_data())
                     self.operating_points[int(node)] = vec.get_data()[0] if unary else vec.get_data()
                 else:
                     print("Ignoring node", node, vec.get_data())
+            elif kind == 'i':
+                self.current[node] = vec.get_data()[0] if unary else vec.get_data()
             else:
                 print("Ignoring type", kind)
 
         for vec in result.get_plots()[0].get_datavectors():
-            kind, node = re.search("([a-zA-Z]+)\(([-a-zA-Z0-9]+)\)", vec.name).group(1, 2)
+            #print(vec.name)
+            kind, node = re.search("([a-zA-Z]+)\(([-.a-zA-Z0-9]+)\)", vec.name).group(1, 2)
             if kind == 'v':
                 if node.isdigit():
                     #print(node, vec.get_data())
                     self.operating_points[int(node)] = vec.get_data()[0] if unary else vec.get_data()
                 else:
                     print("Ignoring node", node)
+            elif kind == 'i':
+                self.current[node] = vec.get_data()[0] if unary else vec.get_data()
             else:
                 print("Ignoring type", kind)
 
@@ -220,6 +236,86 @@ class Capacitor(Component):
                     'value': str(self.capacitance)
                 }}
 
+
+def import_subcircuit(circuit, file, name, *portnames, symbol=None):
+    circuit.imports.append(file)
+    
+    class Subcircuit(Component):
+        IDX = 0
+        
+        def __init__(self, circuit):
+            self.circuit = circuit
+            self.circuit.add(self)
+        
+            self.ports = [Port(circuit, component=self) for i in range(len(portnames))]
+            for i in range(len(portnames)):
+                setattr(self, portnames[i], self.ports[i])
+            self.name = "X" + str(Subcircuit.IDX)
+            Subcircuit.IDX += 1
+            
+        def generate_spice(self):
+            ports = ' '.join([str(p.node) for p in self.ports])
+            return F"{self.name} {ports} {name}"
+        
+        def json(self):
+            if symbol == 'npn':
+                return {
+                    'type': 'q_npn',
+                    "port_directions": {
+                        "C": "input",
+                        "B": "input",
+                        "E": "output"
+                    },
+                    'connections': {
+                        'C': [self.ports[0].node],
+                        'B': [self.ports[1].node],
+                        'E': [self.ports[2].node]
+                    },
+                    'attributes': {
+
+                    }}
+            else:
+                raise Exception("Unknown symbol for subscircuit", name)
+
+    return Subcircuit
+ 
+# Note: this hasn't been tested
+class BipolarTransistor(Component):
+    IDX = 0
+
+    def __init__(self, circuit, name=None, model=None, npn=False, pnp=False):
+        self.circuit = circuit
+        self.circuit.add(self)
+        
+        # Assert that this is npn or pnp
+        assert npn != pnp
+        self.npn = npn
+        self.pnp = pnp
+        
+        self.model = model
+        self.ports = [Port(circuit, component=self), Port(circuit, component=self), Port(circuit, component=self)]
+        self.collector = self.c = self.ports[0]
+        self.base = self.b = self.ports[1]
+        self.emitter = self.e = self.ports[2]
+        self.name = "Q" + str(BipolarTransistor.IDX)
+        BipolarTransistor.IDX += 1
+
+    def generate_spice(self):
+        return F"{self.name} {self.c.node} {self.b.node} {self.e.node} {self.model}"
+
+    def json(self):
+        return {
+                'type': 'q_npn' if self.npn else 'q_pnp',
+                'connections': {
+                    'C': [self.c.node],
+                    'B': [self.b.node],
+                    'E': [self.e.node]
+                },
+                'attributes': {
+
+                }}
+
+
 class Voltage(Component):
     IDX = 0
 
@@ -254,3 +350,7 @@ class Voltage(Component):
                 'attributes': {
                     'value': str(self.voltage)
                 }}
+    
+    @property
+    def current(self):
+        return self.circuit.current.get(self.name.lower())
