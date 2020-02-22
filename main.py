@@ -6,7 +6,6 @@ import re
 import json
 
 def run_spice(spice):
-    #print(spice)
     raw_file = os.path.join(tempfile.mkdtemp(), "spice.raw")
     Popen(['ngspice', '-a', '-b', '-r' + raw_file], stdin=PIPE, stdout=PIPE).communicate(input=spice.encode())
     return ngspice_read(raw_file)
@@ -126,21 +125,33 @@ class Circuit(object):
         result = run_spice(spice)
 
         self._load_result(result)
+        
+    def compute_transient(self, stop, step):
+        spice = "Operating point simulation\n"
+        spice += self.generate_spice()
+        spice += F".tran {step} {stop}\n"
+        spice += ".end\n"
+        result = run_spice(spice)
+
+        self._load_result(result)
 
     def transient_analysis(self):
         pass
 
     def _load_result(self, result, unary=False):
         vec = result.get_plots()[0].get_scalevector()
-        kind, node = re.search("([a-zA-Z]+)\(([-a-zA-Z0-9]+)\)", vec.name).group(1, 2)
-        if kind == 'v':
-            if node.isdigit():
-                #print(node, vec.get_data())
-                self.operating_points[int(node)] = vec.get_data()[0] if unary else vec.get_data()
-            else:
-                print("Ignoring node", node, vec.get_data())
+        if vec.name == 'time':
+            self.time = vec.get_data()
         else:
-            print("Ignoring type", kind)
+            kind, node = re.search("([a-zA-Z]+)\(([-a-zA-Z0-9]+)\)", vec.name).group(1, 2)
+            if kind == 'v':
+                if node.isdigit():
+                    #print(node, vec.get_data())
+                    self.operating_points[int(node)] = vec.get_data()[0] if unary else vec.get_data()
+                else:
+                    print("Ignoring node", node, vec.get_data())
+            else:
+                print("Ignoring type", kind)
 
         for vec in result.get_plots()[0].get_datavectors():
             kind, node = re.search("([a-zA-Z]+)\(([-a-zA-Z0-9]+)\)", vec.name).group(1, 2)
@@ -193,7 +204,7 @@ class Capacitor(Component):
         self.top = self.neg = self.ports[0]
         self.bottom = self.pos = self.ports[1]
         self.name = "C" + str(Capacitor.IDX)
-        Resistor.IDX += 1
+        Capacitor.IDX += 1
 
     def generate_spice(self):
         return F"{self.name} {self.pos.node} {self.neg.node} {self.capacitance}"
@@ -209,21 +220,29 @@ class Capacitor(Component):
                     'value': str(self.capacitance)
                 }}
 
-class DCVoltage(Component):
+class Voltage(Component):
     IDX = 0
 
-    def __init__(self, circuit, name=None, voltage=1):
+    def __init__(self, circuit, name=None, voltage=1, ac=False, piecewise=None):
+        """piecewise = [time voltage time voltage....]"""
         self.circuit = circuit
         self.circuit.add(self)
 
         self.voltage = voltage
+        self.ac = ac
+        self.piecewise = piecewise
         self.pos = Port(circuit, component=self)
         self.neg = Port(circuit, component=self)
-        self.name = "V" + str(DCVoltage.IDX)
-        DCVoltage.IDX += 1
+        self.name = "V" + str(Voltage.IDX)
+        Voltage.IDX += 1
 
     def generate_spice(self):
-        return F"{self.name} {self.pos.node} {self.neg.node} {self.voltage}"
+        if self.piecewise:
+            timing = ' '.join([F"{self.piecewise[2*i]}s {self.piecewise[2*i+1]}" for i in range(len(self.piecewise)//2)])
+            return F"{self.name} {self.pos.node} {self.neg.node} pwl {timing}"
+        else:
+            isAC = ' ac' if self.ac else ''
+            return F"{self.name} {self.pos.node} {self.neg.node}{isAC} {self.voltage}"
 
     def json(self):
         return {
@@ -235,4 +254,3 @@ class DCVoltage(Component):
                 'attributes': {
                     'value': str(self.voltage)
                 }}
-
