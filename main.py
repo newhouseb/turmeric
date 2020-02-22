@@ -180,6 +180,34 @@ class Resistor(Component):
                 'attributes': {
                     'value': str(self.resistance)
                 }}
+    
+class Capacitor(Component):
+    IDX = 0
+
+    def __init__(self, circuit, name=None, capacitance=1e-9):
+        self.circuit = circuit
+        self.circuit.add(self)
+
+        self.capacitance = capacitance
+        self.ports = [Port(circuit, component=self), Port(circuit, component=self)]
+        self.top = self.neg = self.ports[0]
+        self.bottom = self.pos = self.ports[1]
+        self.name = "C" + str(Capacitor.IDX)
+        Resistor.IDX += 1
+
+    def generate_spice(self):
+        return F"{self.name} {self.pos.node} {self.neg.node} {self.capacitance}"
+
+    def json(self):
+        return {
+                'type': 'c_v',
+                'connections': {
+                    'A': [self.top.node],
+                    'B': [self.bottom.node]
+                },
+                'attributes': {
+                    'value': str(self.capacitance)
+                }}
 
 class DCVoltage(Component):
     IDX = 0
