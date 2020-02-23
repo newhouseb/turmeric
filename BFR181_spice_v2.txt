@@ -7,7 +7,7 @@
 *	(C)	2013	Infineon	Technologies	AG							
 *	Version	3.0	August	2013							
 ***************************************************************			
-*.OPTION TNOM=25, GMIN= 1.00e-12
+.OPTION TNOM=25, GMIN= 1.00e-12
 *BFR181 11 22 33
 .SUBCKT BFR181 11 22 33 
 
@@ -25,6 +25,7 @@ LEI   30 3 7.211E-010
 
 Q1 1 2 3 M_BFR181
 
+* Increased this as it was killing convergence +	VTF	=	0.00381019		
 .MODEL 	M_BFR181	NPN(										
 +	IS	=	9.57E-017									
 +	BF	=	131.1									
@@ -52,7 +53,7 @@ Q1 1 2 3 M_BFR181
 +	MJE	=	0.7138		
 +	TF	=	1.72653E-011		
 +	XTF	=	0.07		
-+	VTF	=	0.00381019		
++	VTF	=	0.04 		
 +	ITF	=	0.027024		
 +	PTF	=	0.397851		
 +	CJC	=	8.781E-014		

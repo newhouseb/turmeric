@@ -140,7 +140,7 @@ class Circuit(object):
     def compute_transient(self, stop, step):
         spice = "Operating point simulation\n"
         spice += self.generate_spice()
-        spice += F".tran {step} {stop}\n"
+        spice += F".tran {step}s {stop}s\n"
         spice += ".end\n"
         result = run_spice(spice)
 
@@ -321,7 +321,7 @@ class BipolarTransistor(Component):
 class Voltage(Component):
     IDX = 0
 
-    def __init__(self, circuit, name=None, voltage=1, ac=False, piecewise=None):
+    def __init__(self, circuit, name=None, voltage=1, ac=False, sin=False, offset=0, amplitude=1, freq=1, piecewise=None):
         """piecewise = [time voltage time voltage....]"""
         self.circuit = circuit
         self.circuit.add(self)
@@ -329,6 +329,12 @@ class Voltage(Component):
         self.voltage = voltage
         self.ac = ac
         self.piecewise = piecewise
+        
+        self.sin = sin
+        self.offset = offset
+        self.amplitude = amplitude
+        self.freq = freq
+        
         self.pos = Port(circuit, component=self)
         self.neg = Port(circuit, component=self)
         self.name = "V" + str(Voltage.IDX)
@@ -338,6 +344,8 @@ class Voltage(Component):
         if self.piecewise:
             timing = ' '.join([F"{self.piecewise[2*i]}s {self.piecewise[2*i+1]}" for i in range(len(self.piecewise)//2)])
             return F"{self.name} {self.pos.node} {self.neg.node} pwl {timing}"
+        elif self.sin:
+            return F"{self.name} {self.pos.node} {self.neg.node} sin({self.offset} {self.amplitude} {self.freq})"
         else:
             isAC = ' ac' if self.ac else ''
             return F"{self.name} {self.pos.node} {self.neg.node}{isAC} {self.voltage}"
