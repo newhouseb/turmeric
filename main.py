@@ -137,6 +137,15 @@ class Circuit(object):
 
         self._load_result(result)
         
+    def compute_ac_sweep(self, start, stop, points, linear=False):
+        spice = "Operating point simulation\n"
+        spice += self.generate_spice()
+        spice += F".ac {'LIN' if linear else 'DEC'} {points} {start} {stop}\n"
+        spice += ".end\n"
+        result = run_spice(spice)
+
+        self._load_result(result)
+
     def compute_transient(self, stop, step):
         spice = "Operating point simulation\n"
         spice += self.generate_spice()
@@ -154,7 +163,10 @@ class Circuit(object):
         #print(vec.name)
         if vec.name == 'time':
             self.time = vec.get_data()
+        elif vec.name == 'frequency':
+            self.frequency = vec.get_data()
         else:
+            print(vec.name)
             kind, node = re.search("([a-zA-Z]+)\(([-.a-zA-Z0-9]+)\)", vec.name).group(1, 2)
             if kind == 'v':
                 if node.isdigit():
@@ -162,11 +174,11 @@ class Circuit(object):
                 elif node == 'v-sweep':
                     self.sweep = vec.get_data()
                 else:
-                    print("Ignoring node", node, vec.get_data())
+                    pass #print("Ignoring node", node, vec.get_data())
             elif kind == 'i':
                 self.current[node] = vec.get_data()[0] if unary else vec.get_data()
             else:
-                print("Ignoring type", kind)
+                pass #print("Ignoring type", kind)
 
         for vec in result.get_plots()[0].get_datavectors():
             #print(vec.name)
@@ -176,11 +188,11 @@ class Circuit(object):
                     #print(node, vec.get_data())
                     self.operating_points[int(node)] = vec.get_data()[0] if unary else vec.get_data()
                 else:
-                    print("Ignoring node", node)
+                    pass #print("Ignoring node", node)
             elif kind == 'i':
                 self.current[node] = vec.get_data()[0] if unary else vec.get_data()
             else:
-                print("Ignoring type", kind)
+                pass #print("Ignoring type", kind)
 
 class Resistor(Component):
     IDX = 0
